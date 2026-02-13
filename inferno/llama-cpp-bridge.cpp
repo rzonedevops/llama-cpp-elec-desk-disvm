@@ -20,6 +20,7 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <iomanip>
 #include <memory>
 #include <cstring>
 #include <cstdlib>
