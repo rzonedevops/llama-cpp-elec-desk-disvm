@@ -10,3 +10,14 @@ node_modules/*
 build
 dist
 
+# Inferno FFI bridge artifacts
+inferno/llama-cpp-bridge
+inferno/bin/
+*.dis
+*.log
+*.pid
+
+# Temporary files
+/tmp/
+*.sock
+
