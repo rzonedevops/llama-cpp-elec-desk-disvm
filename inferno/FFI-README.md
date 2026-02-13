@@ -55,7 +55,7 @@ Instead of kernel-level FFI (which would require rebuilding Inferno OS), we use 
 ## Building
 
 ### Prerequisites
-- C++ compiler (g++ or clang)
+- C++ compiler (g++ or clang++)
 - llama.cpp built library
 - Inferno OS with Limbo compiler
 

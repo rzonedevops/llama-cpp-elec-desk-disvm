@@ -91,8 +91,8 @@ std::string escape_json(const std::string& s) {
             o << "\\r";
         } else if (c == '\t') {
             o << "\\t";
-        } else if (c >= 0 && c < 32) {
-            o << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)c;
+        } else if ((unsigned char)c < 32) {
+            o << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)(unsigned char)c;
         } else {
             o << c;
         }
@@ -122,7 +122,7 @@ bool load_model(const std::string& model_path) {
     // Set up model parameters
     llama_model_params model_params = llama_model_default_params();
     model_params.use_mmap = true;
-    model_params.use_mlock = false; // Don't lock memory for distributed nodes
+    model_params.use_mlock = false; // Allow OS to swap if needed; reduces memory pressure in multi-bridge scenarios
     
     // Load model
     g_state.model = llama_load_model_from_file(model_path.c_str(), model_params);

@@ -391,6 +391,10 @@ main() {
             ;;
         stop)
             stop_bridge
+            # Note: This only stops the bridge. To stop the orchestrator, use:
+            # if [ -f /tmp/llambo-orchestrator.pid ]; then
+            #     kill $(cat /tmp/llambo-orchestrator.pid)
+            # fi
             ;;
         test)
             run_tests

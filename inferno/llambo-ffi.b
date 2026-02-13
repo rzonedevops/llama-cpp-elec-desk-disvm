@@ -181,10 +181,20 @@ parse_response(json: string): ref Response
 	if (msg_idx >= 0) {
 		start := msg_idx + len msg_key;
 		end := start;
-		# Handle escaped quotes
+		# Handle escaped quotes - count backslashes before quote
 		while (end < len json) {
-			if (json[end] == '"' && (end == start || json[end-1] != '\\'))
-				break;
+			if (json[end] == '"') {
+				# Count preceding backslashes
+				backslashes := 0;
+				i := end - 1;
+				while (i >= start && json[i] == '\\') {
+					backslashes++;
+					i--;
+				}
+				# If even number of backslashes, quote is not escaped
+				if (backslashes % 2 == 0)
+					break;
+			}
 			end++;
 		}
 		if (end < len json)
@@ -197,10 +207,20 @@ parse_response(json: string): ref Response
 	if (data_idx >= 0) {
 		start := data_idx + len data_key;
 		end := start;
-		# Handle escaped quotes
+		# Handle escaped quotes - count backslashes before quote
 		while (end < len json) {
-			if (json[end] == '"' && (end == start || json[end-1] != '\\'))
-				break;
+			if (json[end] == '"') {
+				# Count preceding backslashes
+				backslashes := 0;
+				i := end - 1;
+				while (i >= start && json[i] == '\\') {
+					backslashes++;
+					i--;
+				}
+				# If even number of backslashes, quote is not escaped
+				if (backslashes % 2 == 0)
+					break;
+			}
 			end++;
 		}
 		if (end < len json)
