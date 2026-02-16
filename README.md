@@ -27,6 +27,7 @@ This project provides two ways to run llama.cpp inference:
 - Aggregate throughput of 10,000+ tokens/sec with 1000+ nodes
 - **Limbot**: AI chat assistant CLI with conversation history
 - **Dish Integration**: Interactive distributed shell for cluster access
+- **FFI Bridge**: Native llama.cpp integration via lightweight bridge service
 
 ## Quick Start
 
@@ -165,6 +166,26 @@ For distributed cluster deployment with thousands of tiny inference engines.
    # Launch interactive shell
    ./llamboctl dish
    ```
+
+### FFI Bridge for Actual llama.cpp Integration
+
+For production deployment with actual LLM inference (not mocks):
+
+1. Build and start the FFI bridge:
+   ```bash
+   cd inferno
+   ./deploy.sh start-bridge
+   ```
+
+2. Bridge exposes llama.cpp via Unix socket at `/tmp/llama-cpp-bridge.sock`
+
+3. Limbo code can connect to bridge using `llambo-ffi` module:
+   ```bash
+   # Test FFI integration
+   ./deploy.sh test-ffi /path/to/model.gguf
+   ```
+
+4. See **[inferno/FFI-README.md](inferno/FFI-README.md)** for complete FFI documentation.
 
 ### Distributed Configuration
 
@@ -309,7 +330,8 @@ Contributions are welcome! Areas of interest:
 - Performance optimizations
 
 **Distributed Mode:**
-- FFI bindings to llama.cpp C library
+- ✅ **FFI Bridge**: Implemented - Unix socket bridge for llama.cpp integration (see `inferno/FFI-README.md`)
+- FFI enhancements: Multi-model support, streaming, connection pooling
 - Advanced load balancing algorithms
 - Consensus and cognitive fusion strategies
 - Monitoring and telemetry

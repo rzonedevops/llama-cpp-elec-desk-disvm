@@ -48,6 +48,108 @@ check_inferno() {
     log_info "Inferno OS found at $INFERNO_ROOT"
 }
 
+# Build the llama-cpp-bridge
+build_bridge() {
+    log_info "Building llama-cpp-bridge..."
+    
+    cd "$LLAMBO_ROOT/inferno"
+    
+    # Check if llama.cpp is built
+    if [ ! -f "../llama.cpp/build/libllama.a" ]; then
+        log_error "llama.cpp library not found"
+        log_info "Building llama.cpp first..."
+        
+        if [ ! -d "../llama.cpp" ]; then
+            log_error "llama.cpp directory not found"
+            log_info "Please clone llama.cpp:"
+            log_info "  cd .. && git clone https://github.com/ggerganov/llama.cpp.git"
+            exit 1
+        fi
+        
+        cd ../llama.cpp
+        mkdir -p build
+        cd build
+        cmake .. || {
+            log_error "Failed to configure llama.cpp"
+            exit 1
+        }
+        cmake --build . --config Release || {
+            log_error "Failed to build llama.cpp"
+            exit 1
+        }
+        log_info "llama.cpp built successfully"
+        cd "$LLAMBO_ROOT/inferno"
+    fi
+    
+    # Build the bridge
+    make clean || true
+    make || {
+        log_error "Failed to build llama-cpp-bridge"
+        exit 1
+    }
+    
+    log_info "llama-cpp-bridge built successfully"
+}
+
+# Start the bridge service
+start_bridge() {
+    log_info "Starting llama-cpp-bridge..."
+    
+    cd "$LLAMBO_ROOT/inferno"
+    
+    # Check if bridge is already running
+    if [ -f /tmp/llama-cpp-bridge.pid ]; then
+        PID=$(cat /tmp/llama-cpp-bridge.pid)
+        if ps -p $PID > /dev/null 2>&1; then
+            log_warn "Bridge already running (PID: $PID)"
+            return 0
+        fi
+    fi
+    
+    # Start bridge in background
+    ./llama-cpp-bridge > /tmp/llama-cpp-bridge.log 2>&1 &
+    BRIDGE_PID=$!
+    echo $BRIDGE_PID > /tmp/llama-cpp-bridge.pid
+    
+    # Wait a moment for startup
+    sleep 1
+    
+    # Check if it's running
+    if ps -p $BRIDGE_PID > /dev/null 2>&1; then
+        log_info "Bridge started successfully (PID: $BRIDGE_PID)"
+        log_info "Socket: /tmp/llama-cpp-bridge.sock"
+    else
+        log_error "Bridge failed to start"
+        log_info "Check log: /tmp/llama-cpp-bridge.log"
+        exit 1
+    fi
+}
+
+# Stop the bridge service
+stop_bridge() {
+    log_info "Stopping llama-cpp-bridge..."
+    
+    if [ -f /tmp/llama-cpp-bridge.pid ]; then
+        PID=$(cat /tmp/llama-cpp-bridge.pid)
+        if ps -p $PID > /dev/null 2>&1; then
+            kill $PID
+            sleep 1
+            if ps -p $PID > /dev/null 2>&1; then
+                kill -9 $PID
+            fi
+            log_info "Bridge stopped"
+        else
+            log_warn "Bridge not running"
+        fi
+        rm -f /tmp/llama-cpp-bridge.pid
+    else
+        log_warn "Bridge PID file not found"
+    fi
+    
+    # Clean up socket
+    rm -f /tmp/llama-cpp-bridge.sock
+}
+
 # Compile Limbo modules
 compile_modules() {
     log_info "Compiling Limbo modules..."
@@ -93,6 +195,21 @@ compile_modules() {
         }
     fi
     
+    # Compile FFI modules
+    log_info "  Compiling llambo-ffi.b -> llambo-ffi.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-ffi.dis llambo-ffi.b" || {
+            log_warn "Failed to compile llambo-ffi.b (non-critical)"
+        }
+    fi
+    
+    log_info "  Compiling llambo-ffi-test.b -> llambo-ffi-test.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-ffi-test.dis llambo-ffi-test.b" || {
+            log_warn "Failed to compile llambo-ffi-test.b (non-critical)"
+        }
+    fi
+    
     log_info "Compilation complete"
 }
 
@@ -113,8 +230,16 @@ deploy_local() {
     cp -v llambotest.b "$DEPLOY_DIR/"
     cp -v dish-integration.b "$DEPLOY_DIR/"
     cp -v limbot.b "$DEPLOY_DIR/"
+    cp -v llambo-ffi.m "$DEPLOY_DIR/"
+    cp -v llambo-ffi.b "$DEPLOY_DIR/"
+    cp -v llambo-ffi-test.b "$DEPLOY_DIR/"
     cp -v cluster-config.yaml "$DEPLOY_DIR/"
     cp -v limbot-cli "$DEPLOY_DIR/"
+    
+    # Copy bridge binary
+    if [ -f "llama-cpp-bridge" ]; then
+        cp -v llama-cpp-bridge "$DEPLOY_DIR/"
+    fi
     
     # Copy .dis files if they exist
     if [ -f "/dis/llambo.dis" ]; then
@@ -125,6 +250,12 @@ deploy_local() {
     fi
     if [ -f "/dis/limbot.dis" ]; then
         cp -v /dis/limbot.dis "$DEPLOY_DIR/dis/" || true
+    fi
+    if [ -f "/dis/llambo-ffi.dis" ]; then
+        cp -v /dis/llambo-ffi.dis "$DEPLOY_DIR/dis/" || true
+    fi
+    if [ -f "/dis/llambo-ffi-test.dis" ]; then
+        cp -v /dis/llambo-ffi-test.dis "$DEPLOY_DIR/dis/" || true
     fi
     
     log_info "Local deployment complete"
@@ -194,6 +325,18 @@ show_status() {
     log_info "Llambo Cluster Status"
     log_info "===================="
     
+    # Check bridge status
+    if [ -f /tmp/llama-cpp-bridge.pid ]; then
+        PID=$(cat /tmp/llama-cpp-bridge.pid)
+        if ps -p $PID > /dev/null 2>&1; then
+            log_info "FFI Bridge: ${GREEN}RUNNING${NC} (PID: $PID)"
+        else
+            log_warn "FFI Bridge: ${YELLOW}STOPPED${NC}"
+        fi
+    else
+        log_warn "FFI Bridge: ${YELLOW}NOT STARTED${NC}"
+    fi
+    
     if [ -f /tmp/llambo-orchestrator.pid ]; then
         PID=$(cat /tmp/llambo-orchestrator.pid)
         if ps -p $PID > /dev/null 2>&1; then
@@ -216,45 +359,83 @@ main() {
         check)
             check_inferno
             ;;
+        build-bridge)
+            build_bridge
+            ;;
+        start-bridge)
+            build_bridge
+            start_bridge
+            ;;
+        stop-bridge)
+            stop_bridge
+            ;;
         compile)
             check_inferno
             compile_modules
             ;;
         deploy-local)
             check_inferno
+            build_bridge
             compile_modules
             deploy_local
             ;;
         deploy-cluster)
             check_inferno
+            build_bridge
             compile_modules
             deploy_cluster
             ;;
         start)
+            start_bridge
             start_orchestrator
+            ;;
+        stop)
+            stop_bridge
+            # Note: This only stops the bridge. To stop the orchestrator, use:
+            # if [ -f /tmp/llambo-orchestrator.pid ]; then
+            #     kill $(cat /tmp/llambo-orchestrator.pid)
+            # fi
             ;;
         test)
             run_tests
+            ;;
+        test-ffi)
+            # Test FFI bridge
+            log_info "Testing FFI bridge..."
+            EMU="$INFERNO_ROOT/Linux/386/bin/emu"
+            if [ -x "$EMU" ]; then
+                $EMU sh -c "run /dis/llambo-ffi-test.dis $2"
+            else
+                log_error "Cannot run test: emulator not found"
+                exit 1
+            fi
             ;;
         status)
             show_status
             ;;
         all)
             check_inferno
+            build_bridge
             compile_modules
             deploy_local
+            start_bridge
             start_orchestrator
             ;;
         *)
-            echo "Usage: $0 {check|compile|deploy-local|deploy-cluster|start|test|status|all}"
+            echo "Usage: $0 {check|build-bridge|start-bridge|stop-bridge|compile|deploy-local|deploy-cluster|start|stop|test|test-ffi|status|all}"
             echo ""
             echo "Commands:"
             echo "  check          - Check Inferno OS installation"
+            echo "  build-bridge   - Build llama-cpp-bridge"
+            echo "  start-bridge   - Build and start FFI bridge service"
+            echo "  stop-bridge    - Stop FFI bridge service"
             echo "  compile        - Compile Limbo modules"
             echo "  deploy-local   - Deploy to local Inferno instance"
             echo "  deploy-cluster - Deploy to distributed cluster"
-            echo "  start          - Start orchestrator"
+            echo "  start          - Start bridge and orchestrator"
+            echo "  stop           - Stop bridge service"
             echo "  test           - Run test suite"
+            echo "  test-ffi       - Test FFI bridge integration"
             echo "  status         - Show cluster status"
             echo "  all            - Run complete deployment"
             echo ""
