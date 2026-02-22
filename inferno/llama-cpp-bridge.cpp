@@ -242,7 +242,9 @@ void perform_streaming_inference(int client_fd, const std::string& prompt) {
     send_response(client_fd, "ok", "Starting token generation");
     
     // Generate tokens one at a time (simplified simulation)
+    // NOTE: This is a simplified streaming simulation for testing/demo purposes.
     // In a full implementation, this would use llama_sample and llama_decode in a loop
+    // to generate tokens based on the actual model and prompt.
     std::vector<std::string> sample_tokens = {
         "In", " a", " distributed", " system", ",",
         " multiple", " nodes", " work", " together", " to",

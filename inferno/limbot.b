@@ -63,7 +63,7 @@ session: ref Session;
 interactive_mode: int;
 one_shot_mode: int;
 bridge: ref Bridge;
-use_streaming: int = 1;  # Enable streaming by default
+use_streaming: int = 0;  # Set to 1 if FFI bridge is available
 accumulated_response: string;
 
 init(ctxt: ref Context, argv: list of string)
