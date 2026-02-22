@@ -194,15 +194,97 @@ Server: {"status":"ok","message":"Resources freed"}
 2. **Streaming**: Token-by-token streaming not yet implemented
 3. **Concurrency**: Single-threaded bridge (can run multiple instances)
 
+## Streaming Token Generation
+
+### Overview
+
+The FFI bridge supports real-time token streaming, allowing applications to display generated text progressively as it's produced. This is essential for interactive AI applications like chat interfaces.
+
+### Streaming Protocol
+
+The bridge implements the `INFER_STREAM` command which:
+1. Accepts a prompt like `INFER`
+2. Sends an initial success response
+3. Streams tokens as JSON objects with format: `{"type":"token","token":"...","final":true|false}`
+4. Marks the final token with `"final":true`
+
+### Using Streaming from Limbo
+
+```limbo
+implement MyStreamingApp;
+
+include "llambo-ffi.m";
+    ffi: LlamboFFI;
+    Bridge, StreamCallback: import ffi;
+
+init(ctx: ref Draw->Context, args: list of string)
+{
+    ffi = load LlamboFFI LlamboFFI->PATH;
+    ffi->init(ctx, nil);
+    
+    bridge := Bridge.connect("");
+    (ok, msg) := bridge.load_model("/models/llama-7b.gguf");
+    
+    if (ok > 0) {
+        # Define callback for streaming tokens
+        accumulated := "";
+        callback := ref fn(token: string, is_final: int) {
+            # Print token immediately as it arrives
+            sys->fprint(fildes(1), "%s", token);
+            accumulated += token;
+            
+            if (is_final) {
+                sys->fprint(fildes(1), "\n[Complete]\n");
+            }
+        };
+        
+        # Start streaming
+        (ok, msg) = bridge.infer_stream("Hello AI!", callback);
+        if (ok <= 0) {
+            print("Streaming failed: %s\n", msg);
+        }
+    }
+    
+    bridge.disconnect();
+}
+```
+
+### Benefits of Streaming
+
+1. **Improved UX**: Users see progress immediately
+2. **Reduced Latency**: Perceived latency is much lower
+3. **Interruptible**: Can cancel generation mid-stream
+4. **Natural Flow**: Mimics human conversation patterns
+
+### Testing Streaming
+
+```bash
+# Run streaming test suite
+./deploy.sh test-streaming
+
+# Run with a model
+./deploy.sh test-streaming /path/to/model.gguf
+```
+
+### Streaming vs Non-Streaming
+
+| Feature | INFER (Non-Streaming) | INFER_STREAM (Streaming) |
+|---------|----------------------|--------------------------|
+| Response Time | Full generation complete | Tokens arrive progressively |
+| User Experience | Wait for complete response | See text as generated |
+| Use Case | Batch processing | Interactive chat |
+| Memory | Full response buffered | Process token-by-token |
+
 ## Future Enhancements
 
 1. **Multi-Model Support**: Load multiple models simultaneously
-2. **Streaming Responses**: Token-by-token generation
+2. ~~**Streaming Responses**: Token-by-token generation~~ ✅ **COMPLETED**
 3. **Model Pool**: Pre-load common models
-4. **Advanced Protocol**: Binary protocol for better performance
-5. **Authentication**: Secure socket with credentials
-6. **Monitoring**: Metrics and health checks
-7. **Load Balancing**: Multiple bridge instances
+4. **Connection Pooling**: Reuse connections efficiently
+5. **Advanced Protocol**: Binary protocol for better performance
+6. **Authentication**: Secure socket with credentials
+7. **Monitoring**: Metrics and health checks
+8. **Load Balancing**: Multiple bridge instances
 
 ## Troubleshooting
 

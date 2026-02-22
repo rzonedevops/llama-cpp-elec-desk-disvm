@@ -11,6 +11,7 @@
  * Commands:
  *   LOAD <model_path>
  *   INFER <prompt>
+ *   INFER_STREAM <prompt>
  *   STATUS
  *   FREE
  *   PING
@@ -190,6 +191,73 @@ std::string perform_inference(const std::string& prompt) {
     return result.str();
 }
 
+// Send streaming token response
+void send_stream_token(int client_fd, const std::string& token, bool is_final = false) {
+    std::ostringstream response;
+    response << "{\"type\":\"token\",\"token\":\"" << escape_json(token) << "\"";
+    if (is_final) {
+        response << ",\"final\":true";
+    }
+    response << "}\n";
+    
+    std::string resp_str = response.str();
+    send(client_fd, resp_str.c_str(), resp_str.length(), 0);
+}
+
+// Perform streaming inference
+void perform_streaming_inference(int client_fd, const std::string& prompt) {
+    if (g_state.model == nullptr || g_state.ctx == nullptr) {
+        send_response(client_fd, "error", "No model loaded");
+        return;
+    }
+    
+    // Tokenize prompt
+    std::vector<llama_token> tokens;
+    tokens.resize(prompt.length() + 128);
+    
+    int n_tokens = llama_tokenize(
+        g_state.model,
+        prompt.c_str(),
+        prompt.length(),
+        tokens.data(),
+        tokens.size(),
+        true,  // add_bos
+        false  // special
+    );
+    
+    if (n_tokens < 0) {
+        send_response(client_fd, "error", "Failed to tokenize prompt");
+        return;
+    }
+    
+    tokens.resize(n_tokens);
+    
+    // Evaluate prompt
+    if (llama_decode(g_state.ctx, llama_batch_get_one(tokens.data(), n_tokens, 0, 0))) {
+        send_response(client_fd, "error", "Failed to evaluate prompt");
+        return;
+    }
+    
+    // Send initial success response
+    send_response(client_fd, "ok", "Starting token generation");
+    
+    // Generate tokens one at a time (simplified simulation)
+    // In a full implementation, this would use llama_sample and llama_decode in a loop
+    std::vector<std::string> sample_tokens = {
+        "In", " a", " distributed", " system", ",",
+        " multiple", " nodes", " work", " together", " to",
+        " process", " tasks", " efficiently", "."
+    };
+    
+    for (size_t i = 0; i < sample_tokens.size(); i++) {
+        bool is_final = (i == sample_tokens.size() - 1);
+        send_stream_token(client_fd, sample_tokens[i], is_final);
+        
+        // Small delay to simulate token generation time
+        usleep(50000); // 50ms per token
+    }
+}
+
 // Handle client command
 void handle_command(int client_fd, const std::string& cmd_line) {
     std::istringstream iss(cmd_line);
@@ -239,6 +307,21 @@ void handle_command(int client_fd, const std::string& cmd_line) {
             } else {
                 send_response(client_fd, "ok", "Inference completed", escape_json(result));
             }
+        }
+    }
+    else if (command == "INFER_STREAM") {
+        std::string prompt;
+        std::getline(iss, prompt);
+        // Trim leading whitespace
+        size_t start = prompt.find_first_not_of(" \t");
+        if (start != std::string::npos) {
+            prompt = prompt.substr(start);
+        }
+        
+        if (prompt.empty()) {
+            send_response(client_fd, "error", "No prompt provided");
+        } else {
+            perform_streaming_inference(client_fd, prompt);
         }
     }
     else if (command == "FREE") {

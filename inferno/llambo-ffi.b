@@ -128,6 +128,61 @@ Bridge.infer(b: self ref Bridge, prompt: string): (int, string, string)
 	return b.send_command(cmd);
 }
 
+# Perform streaming inference with callback
+Bridge.infer_stream(b: self ref Bridge, prompt: string, callback: StreamCallback): (int, string)
+{
+	if (b == nil || !b.connected || b.fd == nil)
+		return (-1, "Not connected to bridge");
+	
+	if (callback == nil)
+		return (-1, "Callback function required");
+	
+	# Send streaming command
+	cmd := "INFER_STREAM " + prompt + "\n";
+	cmd_bytes := array of byte cmd;
+	n := write(b.fd, cmd_bytes, len cmd_bytes);
+	if (n < 0) {
+		return (-1, sprint("Failed to send command: %r"));
+	}
+	
+	# Read initial response
+	buf := array[4096] of byte;
+	n = read(b.fd, buf, len buf);
+	if (n <= 0) {
+		return (-1, "Failed to read initial response");
+	}
+	
+	response_str := string buf[0:n];
+	resp := parse_response(response_str);
+	if (resp == nil || resp.status != "ok") {
+		error_msg := "Failed to start streaming";
+		if (resp != nil)
+			error_msg = resp.message;
+		return (-1, error_msg);
+	}
+	
+	# Read streaming tokens until final token
+	for (;;) {
+		n = read(b.fd, buf, len buf);
+		if (n <= 0)
+			break;
+		
+		token_str := string buf[0:n];
+		stream_token := parse_stream_token(token_str);
+		if (stream_token == nil)
+			continue;
+		
+		# Call callback with token
+		callback(stream_token.token, stream_token.is_final);
+		
+		# Break if final token
+		if (stream_token.is_final)
+			break;
+	}
+	
+	return (1, "Streaming completed");
+}
+
 # Get status
 Bridge.get_status(b: self ref Bridge): (int, string)
 {
@@ -240,4 +295,57 @@ unescape_json(s: string): string
 	# Full JSON unescaping would require more complex parsing
 	# This is sufficient for our protocol where data is pre-escaped
 	return s;
+}
+
+# Parse streaming token response
+# Format: {"type":"token","token":"...","final":true}
+parse_stream_token(json: string): ref StreamToken
+{
+	if (json == nil || json == "")
+		return nil;
+	
+	# Remove leading/trailing whitespace and newlines
+	json = str->drop(json, " \t\n\r");
+	json = str->dropr(json, " \t\n\r");
+	
+	# Check for JSON object
+	if (len json < 2 || json[0] != '{' || json[len json - 1] != '}')
+		return nil;
+	
+	token_resp := ref StreamToken;
+	token_resp.token = "";
+	token_resp.is_final = 0;
+	
+	# Extract token
+	token_key := "\"token\":\"";
+	token_idx := str->in(token_key, json);
+	if (token_idx >= 0) {
+		start := token_idx + len token_key;
+		end := start;
+		# Handle escaped quotes
+		while (end < len json) {
+			if (json[end] == '"') {
+				# Count preceding backslashes
+				backslashes := 0;
+				i := end - 1;
+				while (i >= start && json[i] == '\\') {
+					backslashes++;
+					i--;
+				}
+				# If even number of backslashes, quote is not escaped
+				if (backslashes % 2 == 0)
+					break;
+			}
+			end++;
+		}
+		if (end < len json)
+			token_resp.token = unescape_json(json[start:end]);
+	}
+	
+	# Check for final flag
+	final_key := "\"final\":true";
+	if (str->in(final_key, json) >= 0)
+		token_resp.is_final = 1;
+	
+	return token_resp;
 }
