@@ -25,9 +25,10 @@ This project provides two ways to run llama.cpp inference:
 - Distributed cognition with collective inference capacity
 - Auto-scaling based on load and resource availability
 - Aggregate throughput of 10,000+ tokens/sec with 1000+ nodes
-- **Limbot**: AI chat assistant CLI with conversation history
+- **Limbot**: AI chat assistant CLI with conversation history and real-time token streaming
 - **Dish Integration**: Interactive distributed shell for cluster access
 - **FFI Bridge**: Native llama.cpp integration via lightweight bridge service
+- **Token Streaming**: Progressive text generation for improved interactive experience
 
 ## Quick Start
 
@@ -183,6 +184,9 @@ For production deployment with actual LLM inference (not mocks):
    ```bash
    # Test FFI integration
    ./deploy.sh test-ffi /path/to/model.gguf
+   
+   # Test token streaming
+   ./deploy.sh test-streaming /path/to/model.gguf
    ```
 
 4. See **[inferno/FFI-README.md](inferno/FFI-README.md)** for complete FFI documentation.
@@ -331,7 +335,8 @@ Contributions are welcome! Areas of interest:
 
 **Distributed Mode:**
 - ✅ **FFI Bridge**: Implemented - Unix socket bridge for llama.cpp integration (see `inferno/FFI-README.md`)
-- FFI enhancements: Multi-model support, streaming, connection pooling
+- ✅ **Token Streaming**: Implemented - Real-time progressive text generation
+- FFI enhancements: Multi-model support, connection pooling
 - Advanced load balancing algorithms
 - Consensus and cognitive fusion strategies
 - Monitoring and telemetry
