@@ -210,6 +210,13 @@ compile_modules() {
         }
     fi
     
+    log_info "  Compiling llambo-ffi-stream-test.b -> llambo-ffi-stream-test.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-ffi-stream-test.dis llambo-ffi-stream-test.b" || {
+            log_warn "Failed to compile llambo-ffi-stream-test.b (non-critical)"
+        }
+    fi
+    
     log_info "Compilation complete"
 }
 
@@ -410,6 +417,17 @@ main() {
                 exit 1
             fi
             ;;
+        test-streaming)
+            # Test FFI streaming
+            log_info "Testing FFI streaming..."
+            EMU="$INFERNO_ROOT/Linux/386/bin/emu"
+            if [ -x "$EMU" ]; then
+                $EMU sh -c "run /dis/llambo-ffi-stream-test.dis $2"
+            else
+                log_error "Cannot run test: emulator not found"
+                exit 1
+            fi
+            ;;
         status)
             show_status
             ;;
@@ -422,7 +440,7 @@ main() {
             start_orchestrator
             ;;
         *)
-            echo "Usage: $0 {check|build-bridge|start-bridge|stop-bridge|compile|deploy-local|deploy-cluster|start|stop|test|test-ffi|status|all}"
+            echo "Usage: $0 {check|build-bridge|start-bridge|stop-bridge|compile|deploy-local|deploy-cluster|start|stop|test|test-ffi|test-streaming|status|all}"
             echo ""
             echo "Commands:"
             echo "  check          - Check Inferno OS installation"
@@ -436,6 +454,7 @@ main() {
             echo "  stop           - Stop bridge service"
             echo "  test           - Run test suite"
             echo "  test-ffi       - Test FFI bridge integration"
+            echo "  test-streaming - Test FFI token streaming"
             echo "  status         - Show cluster status"
             echo "  all            - Run complete deployment"
             echo ""

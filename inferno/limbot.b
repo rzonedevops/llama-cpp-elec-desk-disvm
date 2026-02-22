@@ -25,6 +25,10 @@ include "llambo.m";
 	llambo: Llambo;
 	Orchestrator, InferenceRequest, InferenceResponse: import llambo;
 
+include "llambo-ffi.m";
+	ffi: LlamboFFI;
+	Bridge, StreamCallback: import ffi;
+
 Limbot: module {
 	init: fn(ctxt: ref Context, argv: list of string);
 };
@@ -58,6 +62,9 @@ orch: ref Orchestrator;
 session: ref Session;
 interactive_mode: int;
 one_shot_mode: int;
+bridge: ref Bridge;
+use_streaming: int = 0;  # Set to 1 if FFI bridge is available
+accumulated_response: string;
 
 init(ctxt: ref Context, argv: list of string)
 {
@@ -75,6 +82,23 @@ init(ctxt: ref Context, argv: list of string)
 	}
 	
 	llambo->init(ctxt, nil);
+	
+	# Try to load FFI module for streaming support
+	ffi = load LlamboFFI LlamboFFI->PATH;
+	if (ffi != nil) {
+		ffi->init(ctxt, nil);
+		bridge = Bridge.connect("");
+		if (bridge != nil) {
+			print("FFI streaming enabled\n");
+			use_streaming = 1;
+		} else {
+			print("FFI bridge not available, using mock responses\n");
+			use_streaming = 0;
+		}
+	} else {
+		print("FFI module not available, using mock responses\n");
+		use_streaming = 0;
+	}
 	
 	# Parse command line arguments
 	(mode, prompt) := parse_args(argv);
@@ -100,6 +124,8 @@ init(ctxt: ref Context, argv: list of string)
 	
 	# Cleanup
 	session.save_history();
+	if (bridge != nil)
+		bridge.disconnect();
 	if (orch != nil)
 		orch.shutdown_cluster();
 }
@@ -262,23 +288,51 @@ get_ai_response(prompt: string)
 	context := session.build_context();
 	full_prompt := context + "\nUser: " + prompt + "\nAssistant:";
 	
-	# Get response from cluster
-	response := orch.process(full_prompt, 256);
-	
-	if (response == nil) {
-		print("\n[Error: Inference failed]\n");
-		return;
+	# Use FFI streaming if available
+	if (use_streaming && bridge != nil) {
+		accumulated_response = "";
+		
+		# Define callback function for streaming tokens
+		callback := ref fn(token: string, is_final: int) {
+			# Print token immediately
+			sys->fprint(fildes(1), "%s", token);
+			accumulated_response += token;
+		};
+		
+		# Start streaming inference
+		start_time := daytime->now();
+		(ok, msg) := bridge.infer_stream(full_prompt, callback);
+		end_time := daytime->now();
+		
+		if (ok > 0) {
+			# Add to session history
+			session.add("assistant", accumulated_response);
+			
+			# Show timing info
+			elapsed := end_time - start_time;
+			print("\n\033[0;90m[streaming, %d ms]\033[0m\n", elapsed);
+		} else {
+			print("\n[Error: %s]\n", msg);
+		}
+	} else {
+		# Fallback to cluster processing (non-streaming)
+		response := orch.process(full_prompt, 256);
+		
+		if (response == nil) {
+			print("\n[Error: Inference failed]\n");
+			return;
+		}
+		
+		# Display response with streaming effect (simulated)
+		text := response.text;
+		display_streaming(text);
+		
+		# Add to session history
+		session.add("assistant", text);
+		
+		print("\n\033[0;90m[%d tokens, %d ms]\033[0m\n",
+			response.token_count, response.completion_time);
 	}
-	
-	# Display response with streaming effect (simulated)
-	text := response.text;
-	display_streaming(text);
-	
-	# Add to session history
-	session.add("assistant", text);
-	
-	print("\n\033[0;90m[%d tokens, %d ms]\033[0m\n",
-		response.token_count, response.completion_time);
 }
 
 # Display text with streaming effect
