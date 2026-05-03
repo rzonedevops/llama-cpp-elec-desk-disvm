@@ -10,6 +10,9 @@ node_modules/*
 build
 dist
 
+# Jest coverage output
+coverage/
+
 # Inferno FFI bridge artifacts
 inferno/llama-cpp-bridge
 inferno/bin/
