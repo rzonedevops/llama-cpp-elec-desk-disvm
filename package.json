@@ -11,9 +11,31 @@
     "postinstall": "electron-builder install-app-deps",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "copy-dylibs": "node scripts/copy-dylibs.js"
+    "copy-dylibs": "node scripts/copy-dylibs.js",
+    "test": "jest",
+    "test:coverage": "jest --coverage"
   },
-  "keywords": ["electron", "llama.cpp", "node-addon"],
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "scripts/**/*.js",
+      "!src/index.html",
+      "!src/styles.css"
+    ],
+    "coverageReporters": ["text", "lcov"],
+    "testEnvironmentOptions": {},
+    "moduleNameMapper": {
+      "electron": "<rootDir>/tests/__mocks__/electron.js",
+      "llama_addon\\.node$": "<rootDir>/tests/__mocks__/llama_addon.js"
+    }
+  },
+  "keywords": [
+    "electron",
+    "llama.cpp",
+    "node-addon"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -36,8 +58,14 @@
       {
         "from": "llama.cpp/models",
         "to": "models",
-        "filter": ["*.bin"]
+        "filter": [
+          "*.bin"
+        ]
       }
     ]
+  },
+  "devDependencies": {
+    "jest": "^30.3.0",
+    "jest-environment-jsdom": "^30.3.0"
   }
 }
