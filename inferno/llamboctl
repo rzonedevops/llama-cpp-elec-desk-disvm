@@ -269,6 +269,7 @@ EOF
         esac
         ;;
         
+    balancer)
         # Load balancer control
         ACTION="${1:-stats}"
         

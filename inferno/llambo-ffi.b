@@ -355,7 +355,10 @@ parse_stream_token(json: string): ref StreamToken
 # Initialization pre-fills a buffered channel with indices [0..size).
 # acquire() receives an index (blocking if all busy); release() returns it.
 
-# Discover available bridge sockets named <base_path>-N.sock for N in 0..max_n-1
+# Discover available bridge sockets named <base_path>-N.sock for N in 0..max_n-1.
+# Verifies each candidate by actually connecting and pinging — this avoids
+# false positives from stale socket files and false negatives where Inferno
+# refuses to open(2) a live Unix socket as an ordinary file.
 BridgePool.discover(base_path: string, max_n: int): array of string
 {
 	if (base_path == "" || max_n <= 0)
@@ -365,10 +368,13 @@ BridgePool.discover(base_path: string, max_n: int): array of string
 	n := 0;
 	for (i := 0; i < max_n; i++) {
 		p := base_path + "-" + string i + ".sock";
-		fd := sys->open(p, Sys->OREAD);
-		if (fd != nil) {
+		b := Bridge.connect(p);
+		if (b == nil)
+			continue;
+		alive := b.ping();
+		b.disconnect();
+		if (alive) {
 			paths[n++] = p;
-			fd = nil;
 		}
 	}
 	if (n == 0)

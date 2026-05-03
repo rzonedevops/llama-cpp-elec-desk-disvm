@@ -155,18 +155,23 @@ static std::pair<InferParams, std::string> parse_infer_args(const std::string& a
         if (eq == std::string::npos || (sp != std::string::npos && sp < eq)) break;
 
         std::string key = rem.substr(0, eq);
-        rem = rem.substr(eq + 1);
 
-        sp = rem.find(' ');
-        std::string val = (sp != std::string::npos) ? rem.substr(0, sp) : rem;
+        // Validate key BEFORE consuming the prefix from rem.
+        // If unknown, leave rem untouched so the prompt (e.g. "x=hello world")
+        // is preserved verbatim for the inference call.
+        if (key != "max_tokens" && key != "temperature" && key != "top_p")
+            break;
+
+        std::string after_eq = rem.substr(eq + 1);
+        sp = after_eq.find(' ');
+        std::string val = (sp != std::string::npos) ? after_eq.substr(0, sp) : after_eq;
 
         if      (key == "max_tokens")  { try { params.max_tokens  = std::stoi(val); } catch (...) {} }
         else if (key == "temperature") { try { params.temperature = std::stof(val); } catch (...) {} }
         else if (key == "top_p")       { try { params.top_p       = std::stof(val); } catch (...) {} }
-        else { break; } // unknown key — start of prompt
 
         if (sp == std::string::npos) rem.clear();
-        else { rem = rem.substr(sp + 1); ltrim(rem); }
+        else { rem = after_eq.substr(sp + 1); ltrim(rem); }
     }
 
     return {params, rem};
@@ -321,6 +326,7 @@ static void perform_streaming_inference(int fd, const std::string& prompt,
 
         bool is_last = (n_gen == p.max_tokens - 1);
         send_stream_token(fd, std::string(piece, np), is_last);
+        if (is_last) { done = true; break; }  // last token already marked final
 
         llama_sampler_accept(smpl, tok);
         if (llama_decode(g_state.ctx,

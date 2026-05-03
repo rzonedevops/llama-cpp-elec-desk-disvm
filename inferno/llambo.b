@@ -19,6 +19,10 @@ include "rand.m";
 
 include "llambo.m";
 
+include "llambo-ffi.m";
+	ffi: LlamboFFI;
+	Bridge, BridgePool: import ffi;
+
 # ---- Global state -------------------------------------------------------
 
 initialized := 0;
@@ -40,9 +44,14 @@ init(ctxt: ref Draw->Context, args: list of string)
 	str = load String String->PATH;
 	bufio = load Bufio Bufio->PATH;
 	rand = load Rand Rand->PATH;
+	ffi = load LlamboFFI LlamboFFI->PATH;
 
 	if (rand != nil)
 		rand->init(sys->millisec());
+
+	# FFI bridge is optional — if absent, node_worker falls back to mock infer()
+	if (ffi != nil)
+		ffi->init(ctxt, nil);
 
 	initialized = 1;
 	model_cache = nil;
@@ -177,11 +186,32 @@ node_worker(node: ref ClusterNode)
 	# Fork a new namespace so this worker is isolated
 	sys->pctl(Sys->NEWPGRP | Sys->FORKNS, nil);
 
-	# Pre-load model for this worker (addr stores model path in channel workers)
-	model := Model.load(node.addr, nil);
+	# Try to connect to the llama-cpp FFI bridge for real inference.
+	# If unavailable (module not loaded, socket missing, model load fails),
+	# fall back to the in-process mock infer().
+	bridge: ref Bridge;
+	if (ffi != nil) {
+		bridge = Bridge.connect(node.bridge_socket);
+		if (bridge != nil) {
+			(ok, msg) := bridge.load_model(node.addr);
+			if (ok <= 0) {
+				print("llambo: node " + node.id + " bridge load_model failed: " + msg + "\n");
+				bridge.disconnect();
+				bridge = nil;
+			} else {
+				print("llambo: node " + node.id + " connected to FFI bridge\n");
+			}
+		}
+	}
+
+	# Mock-path context: only needed when bridge is unavailable
+	model: ref Model;
 	ctx: ref Context;
-	if (model != nil)
-		ctx = Context.new(model, 2048, 512, 4);
+	if (bridge == nil) {
+		model = Model.load(node.addr, nil);
+		if (model != nil)
+			ctx = Context.new(model, 2048, 512, 4);
+	}
 
 	node.last_heartbeat = sys->millisec();
 
@@ -198,10 +228,25 @@ node_worker(node: ref ClusterNode)
 		node.status = 1;   # busy
 		node.load++;
 
-		if (req.ctx == nil && ctx != nil)
-			req.ctx = ctx;
-
-		response := infer(req);
+		response: ref InferenceResponse;
+		if (bridge != nil) {
+			start_time := sys->millisec();
+			(ok, msg, data) := bridge.infer(req.prompt);
+			response = ref InferenceResponse;
+			if (ok > 0) {
+				response.text = data;
+			} else {
+				response.text = "[llambo: bridge error: " + msg + "]";
+				node.error_count++;
+			}
+			response.tokens = nil;
+			response.token_count = len response.text;
+			response.completion_time = sys->millisec() - start_time;
+		} else {
+			if (req.ctx == nil && ctx != nil)
+				req.ctx = ctx;
+			response = infer(req);
+		}
 
 		node.load--;
 		if (node.load < 0)
@@ -212,6 +257,10 @@ node_worker(node: ref ClusterNode)
 		node.resp_chan <-= response;
 	}
 
+	if (bridge != nil) {
+		bridge.free_model();
+		bridge.disconnect();
+	}
 	if (ctx != nil) ctx.free();
 	if (model != nil) model.free();
 	node.status = 2;  # terminated
@@ -234,6 +283,7 @@ ClusterNode.spawn(addr: string, capacity: int, model_type: string): ref ClusterN
 
 	node.req_chan = chan of ref InferenceRequest;
 	node.resp_chan = chan of ref InferenceResponse;
+	node.bridge_socket = "";  # use FFI default socket
 
 	spawn node_worker(node);
 
@@ -555,6 +605,17 @@ Orchestrator.spawn_cluster(orch: self ref Orchestrator, count: int, model_path: 
 	if (model_path != "")
 		orch.default_model_path = model_path;
 
+	# Discover available FFI bridge sockets so each node can talk to a
+	# dedicated bridge process (massively parallel — no single-socket bottleneck).
+	# Convention: /tmp/llama-cpp-bridge-N.sock per bridge instance.
+	# Falls back to "" (single default socket) if none discovered.
+	bridge_sockets: array of string;
+	if (ffi != nil)
+		bridge_sockets = BridgePool.discover("/tmp/llama-cpp-bridge", orch.max_nodes);
+	n_sockets := 0;
+	if (bridge_sockets != nil)
+		n_sockets = len bridge_sockets;
+
 	spawned := 0;
 	for (i := 0; i < count; i++) {
 		# Infer node type from requested count
@@ -567,12 +628,20 @@ Orchestrator.spawn_cluster(orch: self ref Orchestrator, count: int, model_path: 
 		addr := "tcp!localhost!" + string (9000 + orch.active_nodes + i);
 		node := ClusterNode.spawn(addr, 100, model_type);
 		if (node != nil) {
+			# Assign a dedicated bridge socket round-robin (or "" fallback)
+			if (n_sockets > 0)
+				node.bridge_socket = bridge_sockets[(orch.active_nodes) % n_sockets];
 			orch.balancer.register(node);
 			orch.active_nodes++;
 			spawned++;
 		}
 	}
-	print("llambo: spawned " + string spawned + " nodes (total=" + string orch.active_nodes + ")\n");
+	if (n_sockets > 0)
+		print("llambo: spawned " + string spawned + " nodes across " +
+		      string n_sockets + " FFI bridges (total=" + string orch.active_nodes + ")\n");
+	else
+		print("llambo: spawned " + string spawned + " nodes (total=" + string orch.active_nodes +
+		      "; no dedicated bridges discovered, using default socket)\n");
 	return spawned;
 }
 
@@ -635,13 +704,17 @@ Orchestrator.process(orch: self ref Orchestrator, prompt: string, max_tokens: in
 	req.required_type = "";
 	req.ctx = nil;
 
-	# For nodes without channel workers, supply a context
+	# For nodes without channel workers, supply a context.
+	# Only contexts WE create here are safe to free — channel workers may
+	# install their own ctx into req, and freeing that would corrupt the worker.
+	owned_ctx: ref Context;
+	owned_model: ref Model;
 	if (len orch.balancer.nodes > 0) {
 		node := orch.balancer.nodes[0];
 		if (node != nil && node.req_chan == nil) {
-			model := Model.load(orch.default_model_path, nil);
-			ctx := Context.new(model, 2048, 512, 4);
-			req.ctx = ctx;
+			owned_model = Model.load(orch.default_model_path, nil);
+			owned_ctx = Context.new(owned_model, 2048, 512, 4);
+			req.ctx = owned_ctx;
 		}
 	}
 
@@ -651,8 +724,12 @@ Orchestrator.process(orch: self ref Orchestrator, prompt: string, max_tokens: in
 	if (orch.pending_requests < 0)
 		orch.pending_requests = 0;
 
-	if (req.ctx != nil)
-		req.ctx.free();
+	# Free only what we allocated locally — never req.ctx, since a worker
+	# may have replaced it with its own long-lived context.
+	if (owned_ctx != nil)
+		owned_ctx.free();
+	if (owned_model != nil)
+		owned_model.free();
 
 	return response;
 }
@@ -963,18 +1040,21 @@ infer_fusion(orch: ref Orchestrator, prompt: string, n_nodes: int, strategy: int
 	if (n <= 0)
 		return nil;
 
-	req := ref InferenceRequest;
-	req.prompt = prompt;
-	req.max_tokens = 128;
-	req.temperature = 0.7;
-	req.top_p = 0.9;
-	req.required_type = "";
-	req.ctx = nil;
-
+	# Each goroutine gets its own request — workers may mutate req.ctx,
+	# so a shared instance would be a data race.
 	result_chans := array[n] of chan of ref InferenceResponse;
 	for (i := 0; i < n; i++) {
 		result_chans[i] = chan of ref InferenceResponse;
 		node_idx := i % len orch.balancer.nodes;
+
+		req := ref InferenceRequest;
+		req.prompt = prompt;
+		req.max_tokens = 128;
+		req.temperature = 0.7;
+		req.top_p = 0.9;
+		req.required_type = "";
+		req.ctx = nil;
+
 		spawn dispatch_to_node(orch.balancer.nodes[node_idx], req, result_chans[i]);
 	}
 

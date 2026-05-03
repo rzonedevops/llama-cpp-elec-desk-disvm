@@ -78,6 +78,7 @@ Llambo: module
 		error_count: int;
 		req_chan: chan of ref InferenceRequest;
 		resp_chan: chan of ref InferenceResponse;
+		bridge_socket: string;  # FFI bridge socket path; "" = default
 
 		spawn: fn(addr: string, capacity: int, model_type: string): ref ClusterNode;
 		shutdown: fn(node: self ref ClusterNode);
