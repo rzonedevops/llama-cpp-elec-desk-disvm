@@ -277,6 +277,36 @@ describe('renderer.js — process button click', () => {
 
     expect(mockProcessPrompt).not.toHaveBeenCalled();
   });
+
+  test('displays "Unknown error" when error has no message property', async () => {
+    const errorWithoutMessage = {}; // plain object — no .message
+    mockProcessPrompt.mockRejectedValue(errorWithoutMessage);
+    mockGetWorkerLog.mockResolvedValue('');
+    getEl('model-path').value = '/m.gguf';
+    typeInto('prompt-input', 'question');
+
+    click('process-btn');
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getEl('result-text').textContent).toBe('Error: Unknown error');
+    expect(getEl('status').textContent).toBe('Failed to process prompt: Unknown error');
+  });
+});
+
+// ── handleError with null/undefined error ──────────────────────────────────────
+
+describe('renderer.js — handleError with missing error object', () => {
+  test('shows "Unknown error" in status when selectModel rejects with null', async () => {
+    mockSelectModel.mockRejectedValue(null);
+
+    click('select-model-btn');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getEl('status').textContent).toBe('Error selecting model: Unknown error');
+  });
 });
 
 // ── log polling ───────────────────────────────────────────────────────────────
@@ -355,5 +385,32 @@ describe('renderer.js — worker log polling', () => {
       await Promise.resolve();
       await Promise.resolve();
     }).not.toThrow();
+  });
+
+  test('skips log update when log-content element has been removed from DOM', async () => {
+    let resolvePrompt;
+    mockProcessPrompt.mockReturnValue(new Promise((r) => { resolvePrompt = r; }));
+    mockGetWorkerLog.mockResolvedValue('log data');
+    getEl('model-path').value = '/m.gguf';
+    typeInto('prompt-input', 'p');
+
+    // Start processing — startLogPolling creates #worker-log containing #log-content
+    click('process-btn');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Remove log-content so the next interval call finds null
+    const logEl = document.getElementById('log-content');
+    if (logEl) logEl.remove();
+
+    // Advance timer to trigger the interval-based updateWorkerLog call
+    jest.advanceTimersByTime(1100);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // No crash should have occurred; log-content is still absent
+    expect(document.getElementById('log-content')).toBeNull();
+
+    resolvePrompt('done');
   });
 });

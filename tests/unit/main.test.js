@@ -109,6 +109,21 @@ describe('ipcMain handler: process-prompt', () => {
 
     await expect(invokeHandler('process-prompt', modelPath, 'test')).rejects.toThrow('sync throw');
   });
+
+  test('truncates long prompts with "..." in the log message', async () => {
+    const modelPath = '/absolute/path/to/model.gguf';
+    const longPrompt = 'A'.repeat(60); // 60 characters — exceeds the 50-char threshold
+    fs.existsSync.mockReturnValue(true);
+    mockProcessPrompt.mockImplementation((_mp, _p, cb) => cb(null, 'result'));
+
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    await invokeHandler('process-prompt', modelPath, longPrompt);
+    const loggedText = consoleSpy.mock.calls.find(([msg]) =>
+      typeof msg === 'string' && msg.includes('...')
+    );
+    expect(loggedText).toBeDefined();
+    consoleSpy.mockRestore();
+  });
 });
 
 // ── get-worker-log handler ───────────────────────────────────────────────────
@@ -235,6 +250,109 @@ describe('app lifecycle: activate', () => {
 
     // createWindow() should have been called, instantiating BrowserWindow
     expect(BrowserWindow.getAllWindows).toHaveBeenCalled();
+  });
+
+  test('does not create a new window when windows are already open', async () => {
+    await Promise.resolve();
+
+    const { BrowserWindow } = require('electron');
+    BrowserWindow._instances = [];
+    // Return a non-empty list so createWindow() is skipped
+    BrowserWindow.getAllWindows.mockReturnValue([{}]);
+
+    app._emit('activate');
+
+    // No new BrowserWindow should have been instantiated
+    expect(BrowserWindow._instances).toHaveLength(0);
+  });
+});
+
+// ── BrowserWindow window lifecycle ───────────────────────────────────────────
+
+describe('BrowserWindow: did-finish-load callback', () => {
+  test('logs a message when the window finishes loading', async () => {
+    // Ensure the activate handler (and thus createWindow) has been registered
+    await Promise.resolve();
+
+    const { BrowserWindow } = require('electron');
+    // Clear tracked instances so we get a clean reference to the next window
+    BrowserWindow._instances = [];
+    BrowserWindow.getAllWindows.mockReturnValue([]);
+
+    // Trigger createWindow via the activate event
+    app._emit('activate');
+
+    const instance = BrowserWindow._instances[BrowserWindow._instances.length - 1];
+    expect(instance).toBeDefined();
+
+    // Retrieve the handler registered for 'did-finish-load'
+    const didFinishLoadCall = instance.webContents.on.mock.calls.find(
+      ([event]) => event === 'did-finish-load'
+    );
+    expect(didFinishLoadCall).toBeDefined();
+
+    const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    didFinishLoadCall[1](); // invoke the callback
+    expect(consoleSpy).toHaveBeenCalledWith('[Main Process] Window fully loaded');
+    consoleSpy.mockRestore();
+  });
+});
+
+// ── Development mode ──────────────────────────────────────────────────────────
+
+describe('main.js — NODE_ENV=development', () => {
+  test('opens DevTools when NODE_ENV is "development"', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    let capturedElectron;
+    jest.isolateModules(() => {
+      capturedElectron = require('electron');
+      // fs is already mocked globally; existsSync is available
+      require('../../src/main');
+    });
+
+    // Flush app.whenReady().then() → createWindow()
+    await Promise.resolve();
+
+    const instance = capturedElectron.BrowserWindow._instances[
+      capturedElectron.BrowserWindow._instances.length - 1
+    ];
+    expect(instance).toBeDefined();
+    expect(instance.webContents.openDevTools).toHaveBeenCalledTimes(1);
+
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+});
+
+// ── Addon loading failure ─────────────────────────────────────────────────────
+
+describe('main.js — addon loading failure', () => {
+  test('calls process.exit(1) when the native addon cannot be loaded', () => {
+    const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {});
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Resolve the path that moduleNameMapper maps llama_addon.node to,
+    // then register a factory that throws so main.js hits its catch branch.
+    const addonMockPath = require.resolve(
+      '../../src/addon/build/Release/llama_addon.node'
+    );
+
+    jest.isolateModules(() => {
+      jest.doMock(addonMockPath, () => {
+        throw new Error('native module failed to load');
+      });
+      require('../../src/main');
+    });
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[Main Process] Failed to load llama_addon:',
+      expect.any(Error)
+    );
+
+    exitSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
   });
 });
 
