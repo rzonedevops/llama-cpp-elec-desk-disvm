@@ -53,4 +53,20 @@ LlamboFFI: module
 	
 	# Parse streaming token response
 	parse_stream_token: fn(json: string): ref StreamToken;
+
+	# BridgePool: a semaphore-based pool of Bridge connections
+	# allowing multiple Limbo workers to share bridge instances efficiently.
+	# socket_paths is an array of Unix socket paths, one per bridge instance.
+	# Each acquire() blocks until a bridge is available; release() returns it.
+	BridgePool: adt {
+		bridges: array of ref Bridge;
+		size: int;
+		lock: chan of int;   # semaphore: contains available bridge indices
+
+		new: fn(socket_paths: array of string): ref BridgePool;
+		acquire: fn(bp: self ref BridgePool): ref Bridge;
+		release: fn(bp: self ref BridgePool, b: ref Bridge);
+		health_check: fn(bp: self ref BridgePool);
+		discover: fn(base_path: string, max_n: int): array of string;
+	};
 };
