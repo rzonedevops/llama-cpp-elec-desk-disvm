@@ -410,14 +410,15 @@ static void handle_command(int fd, const std::string& cmd_line) {
         size_t pos = 0;
         while (pos < prompts_str.size()) {
             size_t sep = prompts_str.find("||", pos);
+            std::string seg;
             if (sep == std::string::npos) {
-                std::string seg = prompts_str.substr(pos);
-                if (!seg.empty()) prompts.push_back(seg);
-                break;
+                seg = prompts_str.substr(pos);
+                pos = prompts_str.size();  // exit loop after this iteration
+            } else {
+                seg = prompts_str.substr(pos, sep - pos);
+                pos = sep + 2;
             }
-            std::string seg = prompts_str.substr(pos, sep - pos);
             if (!seg.empty()) prompts.push_back(seg);
-            pos = sep + 2;
         }
 
         std::string json_arr = "[";
