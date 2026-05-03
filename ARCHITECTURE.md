@@ -179,6 +179,106 @@ Cluster behavior controlled via `inferno/cluster-config.yaml`:
 - Auto-scaling parameters  
 - Network topology
 - Model distribution
-- Cognitive fusion settings
+- Cognitive fusion settings (strategy, n_nodes, timeout_ms)
+- Bridge connection pool configuration
+- Persistent state settings
 
-See `inferno/README.md` for complete configuration reference and deployment instructions. 
+See `inferno/README.md` for complete configuration reference and deployment instructions.
+
+---
+
+## Distributed Architecture — Implementation Details (Post-Refactor)
+
+### Module Inventory
+
+| Module | File(s) | Role |
+|--------|---------|------|
+| Core inference + cluster | `llambo.m`, `llambo.b` | ADTs, orchestrator, load balancer, cognitive fusion, auto-scaling, persistent state |
+| Isolated worker process | `llambo-worker.m`, `llambo-worker.b` | Per-node Dis VM worker; JSON stdin/stdout protocol; FFI bridge or mock fallback |
+| FFI bridge client | `llambo-ffi.m`, `llambo-ffi.b` | Unix-socket protocol to C++ bridge; `BridgePool` for multi-bridge pooling |
+| C++ llama.cpp bridge | `llama-cpp-bridge.cpp` | Real token sampling, INFER/INFER_STREAM/INFER_MULTI, --socket-path, KV cache reset |
+| 9P control namespace | `llambo-styxfs.b` | File-based IPC at `/n/llambo/`; ctl/status/metrics/nodes/fusion files; polls ctl every 100ms |
+| Metrics | `llambo-metrics.m`, `llambo-metrics.b` | Thread-safe counters/histogram; Prometheus HTTP server on port 9090 |
+| Dish integration | `dish-integration.b` | Interactive shell; namespace-aware (uses /n/llambo/ when mounted, direct orchestrator otherwise) |
+| Tests | `llambo-consensus-test.b`, `llambo-scale-test.b` | Integration tests for cognitive fusion and auto-scaling |
+| Cluster control | `llamboctl` | Shell wrapper; adds `scale`, `checkpoint` commands |
+
+### Cognitive Fusion — Sequence Diagram
+
+```
+Client
+  │
+  ├─── infer_fusion(orch, prompt, n=5, strategy=1)
+  │                │
+  │         for i in 0..4:
+  │           spawn dispatch_to_node(nodes[i], req, result_chans[i])
+  │                │   │   │   │   │
+  │              [node workers run in parallel]
+  │                │   │   │   │   │
+  │         collect: responses[i] = <-result_chans[i]
+  │                │
+  │         CognitiveFusion.fuse(responses)
+  │           strategy 0: closest-to-average
+  │           strategy 1: majority text vote
+  │           strategy 2: fastest response
+  │           strategy 3: raft quorum (>=min_nodes agree)
+  │                │
+  └─── ref InferenceResponse
+```
+
+### Auto-Scaling — Lifecycle Diagram
+
+```
+auto_scale_monitor (goroutine, runs every 10s)
+  │
+  ├── utilization = pending_requests / active_nodes
+  │
+  ├── utilization > scale_up_threshold (0.8):
+  │     spawn_cluster(active*1.5 - active, default_model_path)
+  │
+  └── utilization < scale_down_threshold (0.2) AND active > min_nodes:
+        scale_to(active * 0.8)
+          ├── Wait up to 10s per node for load=0 (graceful drain)
+          └── ClusterNode.shutdown() → sends nil to req_chan → worker exits
+```
+
+### BridgePool — Connection Pool Flow
+
+```
+BridgePool.new(socket_paths)
+  ├── for each path: bridges[i] = Bridge.connect(path)
+  └── lock channel (buffered, size=N) pre-filled: lock <-= 0, 1, ..., N-1
+
+acquire():           release(b):
+  idx = <-lock         find index i where bridges[i] == b
+  return bridges[idx]  lock <-= i
+```
+
+### Load Balancer Strategies
+
+| ID | Name | Algorithm |
+|----|------|-----------|
+| 0 | round-robin | `rr_index % len(nodes)`, skip status=2 or draining, cursor persists between calls |
+| 1 | least-loaded | Prefer `status==0` nodes with min `load`; fallback to min `load/capacity` ratio |
+| 2 | random | Uniform random among healthy nodes (uses `rand.m`) |
+| 3 | cognitive-affinity | Filter by `required_type`, then least-loaded within type; fallback to global least-loaded |
+
+### Persistent State
+
+State is serialised to JSON by `Orchestrator.save_state()` and restored by `Orchestrator.load_state()`.
+File format:
+```json
+{
+  "version": 1,
+  "timestamp": 1699999999,
+  "active_nodes": 42,
+  "max_nodes": 10000,
+  "total_requests": 1234,
+  "default_model_path": "/models/llama-7b.gguf",
+  "nodes": [
+    {"id":"medium-...", "addr":"tcp!localhost!9000", "model_type":"medium",
+     "capacity":100, "load":0, "status":0},
+    ...
+  ]
+}
+``` 

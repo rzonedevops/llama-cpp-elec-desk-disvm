@@ -34,7 +34,12 @@ error() {
 
 # Test 1: Check file structure
 log "Test 1: Checking file structure..."
-FILES="dish-integration.b limbot.b limbot-cli deploy.sh llamboctl"
+FILES="dish-integration.b limbot.b limbot-cli deploy.sh llamboctl \
+       llambo.m llambo.b llambo-ffi.m llambo-ffi.b \
+       llambo-worker.m llambo-worker.b \
+       llambo-metrics.m llambo-metrics.b \
+       llambo-styxfs.b \
+       llambo-consensus-test.b llambo-scale-test.b"
 for file in $FILES; do
     if [ -f "$file" ]; then
         info "  ✓ $file exists"
@@ -58,11 +63,24 @@ done
 
 # Test 3: Validate Limbo syntax (basic check)
 log "Test 3: Validating Limbo file structure..."
-for file in dish-integration.b limbot.b; do
+for file in dish-integration.b limbot.b llambo.b llambo-ffi.b \
+            llambo-worker.b llambo-metrics.b llambo-styxfs.b \
+            llambo-consensus-test.b llambo-scale-test.b; do
     if head -n 1 "$file" | grep -q "implement"; then
         info "  ✓ $file has valid module declaration"
     else
         error "  ✗ $file missing module declaration"
+        exit 1
+    fi
+done
+
+# Test 3b: Validate .m module files
+log "Test 3b: Validating .m module definitions..."
+for file in llambo.m llambo-ffi.m llambo-worker.m llambo-metrics.m; do
+    if grep -q "PATH:" "$file"; then
+        info "  ✓ $file has PATH constant"
+    else
+        error "  ✗ $file missing PATH constant"
         exit 1
     fi
 done
@@ -94,6 +112,20 @@ if grep -q "dish)" llamboctl; then
     info "  ✓ llamboctl has dish command"
 else
     error "  ✗ llamboctl missing dish command"
+    exit 1
+fi
+
+if grep -q "scale)" llamboctl; then
+    info "  ✓ llamboctl has scale command"
+else
+    error "  ✗ llamboctl missing scale command"
+    exit 1
+fi
+
+if grep -q "checkpoint)" llamboctl; then
+    info "  ✓ llamboctl has checkpoint command"
+else
+    error "  ✗ llamboctl missing checkpoint command"
     exit 1
 fi
 
@@ -131,13 +163,66 @@ else
     info "    Set INFERNO_ROOT to test compilation"
 fi
 
+# Test 8: Check cluster config fields
+log "Test 8: Checking cluster-config.yaml fields..."
+for field in "connection_pool_size" "bridge_discovery_path" "metrics_retention_seconds" \
+             "fusion:" "strategy:" "cognitive_fusion"; do
+    if grep -q "$field" cluster-config.yaml; then
+        info "  ✓ cluster-config.yaml has field: $field"
+    else
+        warn "  ⚠ cluster-config.yaml missing field: $field"
+    fi
+done
+
+# Test 9: Check deploy.sh compiles new modules
+log "Test 9: Checking deploy.sh includes new modules..."
+for module in llambo-worker llambo-metrics llambo-styxfs llambo-consensus-test llambo-scale-test; do
+    if grep -q "$module" deploy.sh; then
+        info "  ✓ deploy.sh includes $module"
+    else
+        warn "  ⚠ deploy.sh may not compile $module"
+    fi
+done
+
+# Test 10: Check C++ bridge improvements
+log "Test 10: Checking C++ bridge features..."
+if grep -q "INFER_MULTI" llama-cpp-bridge.cpp; then
+    info "  ✓ bridge has INFER_MULTI command"
+else
+    error "  ✗ bridge missing INFER_MULTI"
+    exit 1
+fi
+
+if grep -q "llama_sampler_chain_init" llama-cpp-bridge.cpp; then
+    info "  ✓ bridge has real token sampling loop"
+else
+    error "  ✗ bridge missing real token sampling"
+    exit 1
+fi
+
+if grep -q "llama_kv_cache_clear" llama-cpp-bridge.cpp; then
+    info "  ✓ bridge clears KV cache before inference"
+else
+    error "  ✗ bridge missing KV cache clear"
+    exit 1
+fi
+
+if grep -q "\-\-socket-path" llama-cpp-bridge.cpp; then
+    info "  ✓ bridge accepts --socket-path argument"
+else
+    error "  ✗ bridge missing --socket-path argument"
+    exit 1
+fi
+
 echo ""
-log "All basic structure tests passed!"
+log "All structure tests passed!"
 echo ""
 echo "Next steps:"
 echo "  1. Install Inferno OS if not already installed"
 echo "  2. Run: ./deploy.sh compile"
 echo "  3. Run: ./deploy.sh deploy-local"
-echo "  4. Test: llamboctl limbot -h"
-echo "  5. Test: llamboctl dish"
+echo "  4. Test cognitive fusion: llamboctl test-consensus"
+echo "  5. Test auto-scaling: llamboctl test-scale"
+echo "  6. Test: llamboctl limbot -h"
+echo "  7. Test: llamboctl dish"
 echo ""

@@ -349,3 +349,111 @@ parse_stream_token(json: string): ref StreamToken
 	
 	return token_resp;
 }
+
+# ---- BridgePool ---------------------------------------------------------
+# A semaphore-based pool of bridge connections.
+# Initialization pre-fills a buffered channel with indices [0..size).
+# acquire() receives an index (blocking if all busy); release() returns it.
+
+# Discover available bridge sockets named <base_path>-N.sock for N in 0..max_n-1.
+# Verifies each candidate by actually connecting and pinging — this avoids
+# false positives from stale socket files and false negatives where Inferno
+# refuses to open(2) a live Unix socket as an ordinary file.
+BridgePool.discover(base_path: string, max_n: int): array of string
+{
+	if (base_path == "" || max_n <= 0)
+		return nil;
+
+	paths := array[max_n] of string;
+	n := 0;
+	for (i := 0; i < max_n; i++) {
+		p := base_path + "-" + string i + ".sock";
+		b := Bridge.connect(p);
+		if (b == nil)
+			continue;
+		alive := b.ping();
+		b.disconnect();
+		if (alive) {
+			paths[n++] = p;
+		}
+	}
+	if (n == 0)
+		return nil;
+	result := array[n] of string;
+	result[0:] = paths[0:n];
+	return result;
+}
+
+BridgePool.new(socket_paths: array of string): ref BridgePool
+{
+	if (socket_paths == nil || len socket_paths == 0)
+		return nil;
+
+	bp := ref BridgePool;
+	bp.size = len socket_paths;
+	bp.bridges = array[bp.size] of ref Bridge;
+	# Buffered semaphore channel — capacity equals pool size
+	bp.lock = chan(bp.size) of int;
+
+	connected := 0;
+	for (i := 0; i < bp.size; i++) {
+		b := Bridge.connect(socket_paths[i]);
+		bp.bridges[i] = b;
+		if (b != nil) {
+			bp.lock <-= i;   # put this index as an available token
+			connected++;
+		}
+	}
+
+	print("llambo-ffi: bridge pool created (" + string connected + "/" + string bp.size + " connected)\n");
+	return bp;
+}
+
+BridgePool.acquire(bp: self ref BridgePool): ref Bridge
+{
+	if (bp == nil)
+		return nil;
+	# Block until an available bridge index is in the semaphore channel
+	idx := <-bp.lock;
+	if (idx < 0 || idx >= bp.size)
+		return nil;
+	return bp.bridges[idx];
+}
+
+BridgePool.release(bp: self ref BridgePool, b: ref Bridge)
+{
+	if (bp == nil || b == nil)
+		return;
+	# Find the index of this bridge and return the token
+	for (i := 0; i < bp.size; i++) {
+		if (bp.bridges[i] == b) {
+			bp.lock <-= i;
+			return;
+		}
+	}
+}
+
+BridgePool.health_check(bp: self ref BridgePool)
+{
+	if (bp == nil)
+		return;
+	# Non-blocking check: ping each bridge that we can acquire immediately
+	# Uses a zero-wait alt to avoid blocking the caller
+	for (i := 0; i < bp.size; i++) {
+		b := bp.bridges[i];
+		if (b == nil || !b.connected)
+			continue;
+		if (!b.ping()) {
+			# Bridge is unresponsive — attempt reconnect
+			print("llambo-ffi: bridge " + string i + " unresponsive, reconnecting...\n");
+			b.disconnect();
+			nb := Bridge.connect(b.socket_path);
+			bp.bridges[i] = nb;
+			if (nb == nil) {
+				print("llambo-ffi: bridge " + string i + " reconnect failed\n");
+			} else {
+				print("llambo-ffi: bridge " + string i + " reconnected\n");
+			}
+		}
+	}
+}

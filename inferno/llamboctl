@@ -191,6 +191,84 @@ EOF
         esac
         ;;
         
+    scale)
+        # Scale cluster to a target node count
+        TARGET=""
+        
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --count)
+                    TARGET="$2"
+                    shift 2
+                    ;;
+                *)
+                    # Positional argument
+                    TARGET="$1"
+                    shift
+                    ;;
+            esac
+        done
+        
+        if [ -z "$TARGET" ]; then
+            error "Usage: llamboctl scale --count N  (or: llamboctl scale N)"
+            exit 1
+        fi
+        
+        log "Scaling cluster to $TARGET nodes..."
+        
+        CTL_FILE="${CTL_FILE:-/n/llambo/ctl}"
+        if [ -w "$CTL_FILE" ]; then
+            echo "scale $TARGET" > "$CTL_FILE"
+            log "Scale command sent via $CTL_FILE"
+        else
+            warn "Control file $CTL_FILE not writable — cluster may not be running"
+            warn "Start llambo-styxfs first, or use: llamboctl spawn --count $TARGET"
+        fi
+        ;;
+        
+    checkpoint)
+        # Read and display persisted cluster state
+        ACTION="${1:---show}"
+        CHECKPOINT_PATH="${2:-/var/llambo/cluster-state.json}"
+        STATE_FALLBACK="${STATE_FILE}"
+        
+        case "$ACTION" in
+            --show)
+                if [ -f "$CHECKPOINT_PATH" ]; then
+                    log "Checkpoint: $CHECKPOINT_PATH"
+                    cat "$CHECKPOINT_PATH"
+                elif [ -f "$STATE_FALLBACK" ]; then
+                    log "Temporary state: $STATE_FALLBACK"
+                    cat "$STATE_FALLBACK"
+                else
+                    warn "No checkpoint found at $CHECKPOINT_PATH"
+                fi
+                ;;
+            --save)
+                CTL_FILE="${CTL_FILE:-/n/llambo/ctl}"
+                if [ -w "$CTL_FILE" ]; then
+                    echo "save $CHECKPOINT_PATH" > "$CTL_FILE"
+                    log "Save command sent — checkpoint will appear at $CHECKPOINT_PATH"
+                else
+                    warn "Control file not writable"
+                fi
+                ;;
+            --restore)
+                CTL_FILE="${CTL_FILE:-/n/llambo/ctl}"
+                if [ -w "$CTL_FILE" ]; then
+                    echo "restore $CHECKPOINT_PATH" > "$CTL_FILE"
+                    log "Restore command sent from $CHECKPOINT_PATH"
+                else
+                    warn "Control file not writable"
+                fi
+                ;;
+            *)
+                error "Unknown checkpoint action: $ACTION"
+                exit 1
+                ;;
+        esac
+        ;;
+        
     balancer)
         # Load balancer control
         ACTION="${1:-stats}"
@@ -229,14 +307,33 @@ EOF
         ;;
         
     metrics)
-        # Export metrics
+        # Export metrics — reads from live HTTP endpoint when available,
+        # otherwise renders static sample data
         FORMAT="${1:--format}"
         OUTPUT="${2:-prometheus}"
+        METRICS_PORT="${METRICS_PORT:-9090}"
+        METRICS_FILE_NS="/n/llambo/metrics"
         
         if [ "$FORMAT" = "--export" ]; then
             case "$OUTPUT" in
                 prometheus)
-                    log "Exporting metrics in Prometheus format..."
+                    # Try live HTTP endpoint first
+                    if command -v curl >/dev/null 2>&1; then
+                        LIVE=$(curl -sf --max-time 2 "http://localhost:${METRICS_PORT}/metrics" 2>/dev/null)
+                        if [ -n "$LIVE" ]; then
+                            log "Exporting live metrics from port ${METRICS_PORT}..."
+                            echo "$LIVE"
+                            exit 0
+                        fi
+                    fi
+                    # Try namespace file
+                    if [ -f "$METRICS_FILE_NS" ]; then
+                        log "Exporting metrics from $METRICS_FILE_NS..."
+                        cat "$METRICS_FILE_NS"
+                        exit 0
+                    fi
+                    # Static sample fallback
+                    log "Exporting metrics (static sample — start cluster for live data)..."
                     cat << 'EOF'
 # HELP llambo_inference_latency_ms Inference latency in milliseconds
 # TYPE llambo_inference_latency_ms gauge
@@ -397,15 +494,21 @@ Commands:
   spawn                    Spawn cluster nodes
     --count <n>              Number of nodes (default: 10)
     --type <type>            Node type: tiny|medium|large
+  scale                    Scale cluster to a target node count
+    --count <N>              Target node count (also: llamboctl scale N)
   shutdown                 Shutdown cluster
   status                   Show cluster status
+  checkpoint               Manage persistent cluster state
+    --show [path]            Show checkpoint file
+    --save [path]            Save current state
+    --restore [path]         Restore from checkpoint
   nodes <action>          Manage nodes
     list                     List all nodes
   balancer <action>       Load balancer control
     stats                    Show balancer statistics
     --strategy <s>           Set balancing strategy
   metrics --export <fmt>  Export metrics
-    prometheus               Prometheus format
+    prometheus               Prometheus format (reads live HTTP endpoint when available)
     json                     JSON format
   config <action>         Configuration management
     --show                   Show current config
@@ -422,11 +525,15 @@ Commands:
 Environment:
   CLUSTER_CONFIG          Path to cluster configuration
                           (default: ./cluster-config.yaml)
+  METRICS_PORT            Port for live Prometheus metrics (default: 9090)
+  CTL_FILE                Path to cluster control file (default: /n/llambo/ctl)
 
 Examples:
   llamboctl init
   llamboctl spawn --count 1000 --type tiny
   llamboctl status
+  llamboctl scale --count 500
+  llamboctl checkpoint --save
   llamboctl nodes list
   llamboctl balancer stats
   llamboctl metrics --export prometheus
