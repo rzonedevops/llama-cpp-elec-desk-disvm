@@ -75,7 +75,12 @@ cluster:
     aggregation_strategy: "weighted-average"
     min_consensus_nodes: 3
     cognitive_fusion: true
-    
+    # fusion strategy: 0=weighted-avg, 1=majority-vote, 2=confidence-weighted, 3=raft-consensus
+    fusion:
+      strategy: 0
+      n_nodes: 5        # number of nodes to query per fusion call
+      timeout_ms: 30000
+
   # Monitoring
   monitoring:
     enabled: true
@@ -87,6 +92,7 @@ cluster:
       - "cognitive_coherence"
     export_format: "prometheus"
     export_port: 9090
+    metrics_retention_seconds: 3600
 
 # VM instance configuration
 inferno_vm:
@@ -113,11 +119,26 @@ inferno_vm:
       namespace: "/n/llambo-orch"
       modules:
         - "/dis/llambo.dis"
+        - "/dis/llambo-ffi.dis"
+        - "/dis/llambo-metrics.dis"
+        - "/dis/llambo-styxfs.dis"
         - "/dis/sys.dis"
         - "/dis/draw.dis"
       environment:
         LLAMBO_MODE: "orchestrator"
         LLAMBO_CLUSTER_ID: "{{cluster.name}}"
+
+# Connection pool configuration (for multi-bridge deployments)
+bridge:
+  connection_pool_size: 4          # number of bridge instances to maintain in pool
+  bridge_discovery_path: "/tmp/llama-cpp-bridge"  # sockets at <path>-N.sock
+  socket_path: "/tmp/llama-cpp-bridge.sock"        # default single-bridge socket
+
+# Persistent state
+state:
+  enabled: true
+  path: "/var/llambo/cluster-state.json"
+  checkpoint_on_change: true       # save after every spawn/shutdown
 
 # Deployment configuration
 deployment:

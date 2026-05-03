@@ -217,6 +217,42 @@ compile_modules() {
         }
     fi
     
+    # Compile new distributed architecture modules
+    log_info "  Compiling llambo-worker.b -> llambo-worker.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-worker.dis llambo-worker.b" || {
+            log_warn "Failed to compile llambo-worker.b (non-critical)"
+        }
+    fi
+    
+    log_info "  Compiling llambo-metrics.b -> llambo-metrics.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-metrics.dis llambo-metrics.b" || {
+            log_warn "Failed to compile llambo-metrics.b (non-critical)"
+        }
+    fi
+    
+    log_info "  Compiling llambo-styxfs.b -> llambo-styxfs.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-styxfs.dis llambo-styxfs.b" || {
+            log_warn "Failed to compile llambo-styxfs.b (non-critical)"
+        }
+    fi
+    
+    log_info "  Compiling llambo-consensus-test.b -> llambo-consensus-test.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-consensus-test.dis llambo-consensus-test.b" || {
+            log_warn "Failed to compile llambo-consensus-test.b (non-critical)"
+        }
+    fi
+    
+    log_info "  Compiling llambo-scale-test.b -> llambo-scale-test.dis"
+    if [ -x "$EMU" ]; then
+        $EMU sh -c "limbo -o /dis/llambo-scale-test.dis llambo-scale-test.b" || {
+            log_warn "Failed to compile llambo-scale-test.b (non-critical)"
+        }
+    fi
+    
     log_info "Compilation complete"
 }
 
@@ -242,6 +278,14 @@ deploy_local() {
     cp -v llambo-ffi-test.b "$DEPLOY_DIR/"
     cp -v cluster-config.yaml "$DEPLOY_DIR/"
     cp -v limbot-cli "$DEPLOY_DIR/"
+    # New distributed architecture modules
+    cp -v llambo-worker.m "$DEPLOY_DIR/" 2>/dev/null || true
+    cp -v llambo-worker.b "$DEPLOY_DIR/" 2>/dev/null || true
+    cp -v llambo-metrics.m "$DEPLOY_DIR/" 2>/dev/null || true
+    cp -v llambo-metrics.b "$DEPLOY_DIR/" 2>/dev/null || true
+    cp -v llambo-styxfs.b "$DEPLOY_DIR/" 2>/dev/null || true
+    cp -v llambo-consensus-test.b "$DEPLOY_DIR/" 2>/dev/null || true
+    cp -v llambo-scale-test.b "$DEPLOY_DIR/" 2>/dev/null || true
     
     # Copy bridge binary
     if [ -f "llama-cpp-bridge" ]; then
