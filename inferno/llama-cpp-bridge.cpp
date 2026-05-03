@@ -325,8 +325,9 @@ static void perform_streaming_inference(int fd, const std::string& prompt,
         if (np < 0) break;
 
         bool is_last = (n_gen == p.max_tokens - 1);
+        bool is_last = (n_gen == p.max_tokens - 1);
         send_stream_token(fd, std::string(piece, np), is_last);
-        if (is_last) { done = true; break; }  // last token already marked final
+        if (is_last) { done = true; break; }
 
         llama_sampler_accept(smpl, tok);
         if (llama_decode(g_state.ctx,
