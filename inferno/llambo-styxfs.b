@@ -263,8 +263,16 @@ process_ctl_command(cmd: string)
 		}
 
 	"infer" =>
-		if (args == nil || orch == nil) return;
-		prompt := str->join(args, " ");
+		if (orch == nil) return;
+		# Preserve the original prompt text (everything after "infer ")
+		infer_prefix := "infer ";
+		infer_idx := str->in(infer_prefix, cmd);
+		prompt := "";
+		if (infer_idx >= 0)
+			prompt = cmd[infer_idx + len infer_prefix:];
+		else if (args != nil)
+			prompt = str->join(args, " ");
+		if (prompt == "") return;
 		response := orch.process(prompt, 256);
 		fd := sys->create(FUSION_DIR + "/last-result", Sys->OWRITE, 8r644);
 		if (fd != nil)

@@ -494,7 +494,7 @@ auto_scale_monitor(orch: ref Orchestrator)
 	for (;;) {
 		sys->sleep(AUTOSCALE_INTERVAL);
 		if (orch == nil || orch.active_nodes <= 0)
-			continue;
+			continue;  # guard ensures active_nodes > 0 before division below
 
 		utilization := real orch.pending_requests / real orch.active_nodes;
 

@@ -207,7 +207,7 @@ else
     exit 1
 fi
 
-if grep -q "socket-path" llama-cpp-bridge.cpp; then
+if grep -q "\-\-socket-path" llama-cpp-bridge.cpp; then
     info "  ✓ bridge accepts --socket-path argument"
 else
     error "  ✗ bridge missing --socket-path argument"

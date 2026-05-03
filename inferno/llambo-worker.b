@@ -265,7 +265,9 @@ handle_infer(json: string, stdout: ref Sys->FD)
 
 	if (bridge != nil) {
 		# Real inference via FFI bridge
-		cmd := sprint("INFER max_tokens=%d %s", max_tokens, prompt);
+		# Escape newlines in prompt to keep the command on a single line
+		safe_prompt := escape_for_json(prompt);
+		cmd := sprint("INFER max_tokens=%d %s", max_tokens, safe_prompt);
 		(rc, msg, data) := bridge.send_command(cmd);
 		if (rc > 0) {
 			result_text = data;

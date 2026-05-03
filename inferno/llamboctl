@@ -318,7 +318,7 @@ EOF
                 prometheus)
                     # Try live HTTP endpoint first
                     if command -v curl >/dev/null 2>&1; then
-                        LIVE=$(curl -sf "http://localhost:${METRICS_PORT}/metrics" 2>/dev/null)
+                        LIVE=$(curl -sf --max-time 2 "http://localhost:${METRICS_PORT}/metrics" 2>/dev/null)
                         if [ -n "$LIVE" ]; then
                             log "Exporting live metrics from port ${METRICS_PORT}..."
                             echo "$LIVE"

@@ -208,6 +208,19 @@ static bool load_model(const std::string& model_path) {
 }
 
 // ---------------------------------------------------------------------------
+// Build the sampler chain (top-p → temperature → distribution)
+// Caller is responsible for llama_sampler_free(smpl) after use.
+// ---------------------------------------------------------------------------
+static struct llama_sampler* build_sampler(const InferParams& p) {
+    llama_sampler_chain_params sp = llama_sampler_chain_default_params();
+    struct llama_sampler* smpl = llama_sampler_chain_init(sp);
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(p.top_p, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(p.temperature));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    return smpl;
+}
+
+// ---------------------------------------------------------------------------
 // Core inference with real token sampling loop
 // ---------------------------------------------------------------------------
 static std::string perform_inference(const std::string& prompt, const InferParams& p) {
@@ -231,11 +244,7 @@ static std::string perform_inference(const std::string& prompt, const InferParam
         return "ERROR: Failed to evaluate prompt";
 
     // Build sampler chain: top-p → temperature → distribution
-    llama_sampler_chain_params sp = llama_sampler_chain_default_params();
-    struct llama_sampler* smpl = llama_sampler_chain_init(sp);
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(p.top_p, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(p.temperature));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    struct llama_sampler* smpl = build_sampler(p);
 
     std::string result;
     int n_gen = 0;
@@ -292,11 +301,7 @@ static void perform_streaming_inference(int fd, const std::string& prompt,
     // Acknowledge streaming start
     send_response(fd, "ok", "Starting token generation");
 
-    llama_sampler_chain_params sp = llama_sampler_chain_default_params();
-    struct llama_sampler* smpl = llama_sampler_chain_init(sp);
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(p.top_p, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(p.temperature));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    struct llama_sampler* smpl = build_sampler(p);
 
     bool done = false;
     int  n_gen = 0;
@@ -400,16 +405,18 @@ static void handle_command(int fd, const std::string& cmd_line) {
         auto [params, prompts_str] = parse_infer_args(rest);
         if (prompts_str.empty()) { send_response(fd, "error", "No prompts after parameters"); return; }
 
-        // Split prompts by "||"
+        // Split prompts by "||", skip empty segments
         std::vector<std::string> prompts;
         size_t pos = 0;
-        while (pos <= prompts_str.size()) {
+        while (pos < prompts_str.size()) {
             size_t sep = prompts_str.find("||", pos);
             if (sep == std::string::npos) {
-                prompts.push_back(prompts_str.substr(pos));
+                std::string seg = prompts_str.substr(pos);
+                if (!seg.empty()) prompts.push_back(seg);
                 break;
             }
-            prompts.push_back(prompts_str.substr(pos, sep - pos));
+            std::string seg = prompts_str.substr(pos, sep - pos);
+            if (!seg.empty()) prompts.push_back(seg);
             pos = sep + 2;
         }
 
