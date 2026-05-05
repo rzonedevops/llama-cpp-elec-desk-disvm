@@ -32,12 +32,14 @@ class BrowserWindow {
       on: jest.fn(),
       send: jest.fn(),
     };
+    BrowserWindow._instances.push(this);
   }
 
   loadFile = jest.fn();
   on = jest.fn();
 
   static getAllWindows = jest.fn(() => []);
+  static _instances = [];
 }
 
 // ── ipcMain ──────────────────────────────────────────────────────────────────
